@@ -1,0 +1,221 @@
+---
+title: "Assignment 4"
+Team member: Xi(Athena) Li, Lanxin(Lancy) Mao, Elena Lopez
+output: html_notebook
+---
+
+```{r Install packages}
+library(ISLR)
+library(glmnet)
+library(ModelMetrics)
+```
+
+```{r Import data}
+# Import dataset ---------------------------
+rm(list = ls(all = TRUE))
+DataOrig <- read.table("spambasedata-Orig.csv",sep=",",header=T,
+                       stringsAsFactors=F)
+
+# ord <- sample(nrow(DataCoded))
+# save(ord,file="SpamdataPermutation.RData")
+load(file="SpamdataPermutation.RData")
+DataOrig <- DataOrig[ord,]
+
+# Doing a 60-40 split
+TrainInd <- ceiling(nrow(DataOrig)*0.6)
+TrainData <- DataOrig[1:TrainInd,]
+ValData <- DataOrig[(TrainInd+1):nrow(DataOrig),]
+
+# Divide data into X--predictors and Y-response
+# #'model.matrix' expands factors to a set of dummy variables
+XTrain <- model.matrix(TrainData$IsSpam ~ .,TrainData[,-58]) 
+XVal <- model.matrix(ValData$IsSpam ~ .,ValData[,-58])
+YTrain <- TrainData$IsSpam
+YVal <- ValData$IsSpam
+
+```
+
+
+```{r Define log-likelihood and AUC Function}
+# Define log-likelihood Function ---------------------------
+# Function to compute the log-likelihood. This is written to avoid computing the
+# log when it is not relevant. Specifically, it would be natural to compute the
+# log-likelihood as:
+#         sum(YVal*log(PHat)+(1-YVal)*log(1-PHat))
+# In this case, the both log terms are evaulated even when the coefficient YVal
+# of 1-YVal is 0. This causes NAs when PHat is very close to 1. The code below
+# Eliminates this problem by only evaluating the log when the coefficient is
+# not 0.
+
+LLfn <- function(PHat,YVal) {
+  tmp <- rep(NA,length(PHat))
+  tmp[YVal==1] <- log(PHat[YVal==1])
+  tmp[YVal==0] <- log(1-PHat[YVal==0])
+  sum(tmp)
+}
+
+# Define AUC Function --------------------------- 
+AUC <- function(Pvec,Cvec) {
+  NHam <- sum(Cvec==0)
+  NSpam <- sum(Cvec==1)
+  PvecS <- unique(sort(Pvec))
+  x <- rep(NA,length(PvecS))
+  y <- rep(NA,length(PvecS))
+  for(i in 1:length(PvecS)) {
+    x[i] <- sum(Pvec>=PvecS[i]&Cvec==0)/NHam
+    y[i] <- sum(Pvec>=PvecS[i]&Cvec==1)/NSpam
+  }
+  x <- c(0,x,1)
+  y <- c(0,y,1)
+  ord <- order(x)
+  x <- x[ord]
+  y <- y[ord]
+  
+  AUC <- sum((x[2:length(x)]-x[1:(length(x)-1)])*(y[2:length(y)]+y[1:(length(y)-1)])/2)
+}
+
+```
+
+
+
+1.Using the spam data with the original continuous feature (i.e., the un-coded data), perform ridge regression using logistic regression (family=”binomial”). Use AUC (calculated on the validation data) as the performance criterion. Make a plot of AUC vs complexity. You will have to experiment to find a grid of  values that will give you a useful plot.
+
+```{r Q1 Ridge Regression using logistic regression}
+grid <- 10^seq(-6,-4,length=1000)
+# train the ridge regression, and then predict it on the validation dataset
+outR <- glmnet(XTrain, YTrain, family = "binomial", lambda = grid, alpha=0,thresh=1e-12)
+
+# Find the best lambda from all lambdas
+AUCgridR <- matrix(, ncol = 2)
+
+for (i in outR$lambda)
+{
+  f <- glmnet(XTrain,YTrain, family = "binomial", lambda = i, alpha=0,thresh=1e-12)
+  a <- AUC(predict(f,newx=XVal, s = i, type = "response"), YVal)
+  r  <- c(i, a)
+  AUCgridR <- rbind(AUCgridR, r)
+}
+
+bestlamR <- AUCgridR[which.max(AUCgridR[,2]),]
+# fits best when lamda = 8.22e-06 (AUC = 0.969)
+
+# plot lambda(complexity) vs AUC
+# The higher the lamba (less complex), lower the AUC
+AUCplot_R <- plot(AUCgridR[,1],AUCgridR[,2], xlab = 'lambda',ylab = 'AUC',main='Ridge Regression AUC performance')
+```
+
+
+2.Repeat (1) using the lasso instead of ridge regression.
+```{r Q2 Lasso Regression using logistic regression}
+grid <- 10^seq(-3,-5,length=1000)
+# train the lasso regression, and then predict it on the validation dataset
+outL <- glmnet(XTrain, YTrain, family = "binomial", lambda = grid, alpha=1, thresh=1e-12)
+
+# Find the best lambda from all lambdas
+AUCgridL <- matrix(, ncol = 3)
+
+for (i in outL$lambda)
+{
+  f <- glmnet(XTrain,YTrain, family = "binomial", lambda = i, alpha=1,thresh=1e-12)
+  a <- AUC(predict(f,newx=XVal, s = i, type = "response"), YVal)
+  n <- sum(abs(coef(f)) >= (10 ^ -2))
+  r  <- c(i, a, n)
+  AUCgridL <- rbind(AUCgridL, r)
+}
+
+bestlamL <- AUCgridL[which.max(AUCgridL[,2]),]
+# fits best when lamda = 1.51e-04 (AUC = 0.969)
+
+# plot lambda(complexity) vs AUC
+# The higher the lamba (less complex), lower the AUC
+AUCplot_L <- plot(AUCgridL[,1],AUCgridL[,2], xlab = 'lambda',ylab = 'AUC',main='Lasso Regression AUC performance')
+```
+
+3.For the lasso regression, make the plots of AUC against the number of included variables
+(i.e., variables with non-zero coefficients). Since none of the coefficients is likely to be exactly 0 numerically, you will have to think about what this means and how to make the plot.
+```{r Q3 Lasso Regression feature selection}
+AUCplot_L2 <- plot(AUCgridL[,3],AUCgridL[,2], xlab = '# of variables',ylab = 'AUC',main='AUC against the number of included variables for lasso regression')
+# The more the variables (more complex), higher the AUC
+# When lambda is 1.51e-04, 53 variables are included in the model, and the AUC reaches the highest at 0.969
+```
+
+4.Are you getting the behavior you expect? Why or why not? In answering this question, address both the results of the ridge regression and the lasso regression.
+
+yes. In general, performance decreases as complexity decreases.
+Regularization is a very important to prevent the coefficients to fit so perfectly to overfit. Lasso penalty function is also known as least absolute deviations, while ridge penalty function is also known as least squares error.
+
+ridge regression: when lambda less than 8.22e-06, AUC increases as complexity decreases (lambda increases) and hence overfitting problem is reduced; When lamba is at 8.22e-06, the model gets its best performance (AUC=0.969). This is the point when the complexity of the model is the best. When lambda is greater than 8.22e-06, AUC decreases as complexity decreases(lambda increases),which makes sense because this indicates that the penalty coefficient is too big to penalize the overfiting problem in this model.
+
+lasso regression: when lambda less than 1.51e-04, AUC increases as complexity decreases (lambda increases) and hence overfitting problem is reduced; When lamba is at 1.51e-04, the model gets its best performance (AUC=0.969). This is the point when the complexity of the model is the best. When lambda is greater than 1.51e-04, AUC decreases as complexity decreases(lambda increases),which makes sense because this indicates that the penalty coefficient is too big to penalize the overfiting problem in this model.
+
+lasso regularization has the built-in feature selection, and it is resistant to outliers so it is more robust.
+
+In this case, when we choose 53 variables, the model gets the best performance (highest AUC). 
+
+
+
+5.To see if you get the same behaviors using a difference criteria than the AUC, repeat (1)- (4) above using the log-likelihood computed on the validation data as the performance criterion.
+```{r ridge regression with log-likelihood performance}
+#ridge regression with log-likelihood performance
+grid <- 10^seq(-2,-5,length=1000)
+lloutR <- glmnet(XTrain, YTrain, family = "binomial", lambda = grid, alpha=1, thresh=1e-12)
+llR <- matrix(, ncol = 2)
+
+for (i in lloutR$lambda)
+{
+  f <- glmnet(XTrain,YTrain, family = "binomial", lambda = i, alpha=0, thresh=1e-12)
+  a <- LLfn(predict(f,newx=XVal, s = i, type = "response"), YVal)
+  r  <- c(i, a)
+  llR <- rbind(llR, r)
+}
+
+bestlamR <- llR[which.max(llR[,2]),]
+# fits best when lamda = 1.36e-03 (LL = -441)
+
+llplot_R <- plot(llR[,1], llR[,2], xlab = 'lambda',ylab = 'LL', main='ridge regression with log-likelihood performance')
+```
+
+```{r lasso regression with log-likelihood performance}
+#lasso regression with log-likelihood performance
+grid <- 10^seq(-2,-5,length=1000)
+lloutL <- glmnet(XTrain, YTrain, family = "binomial", lambda = grid, alpha=1, thresh=1e-12)
+llL <- matrix(, ncol = 3)
+
+for (i in lloutL$lambda)
+{
+  f <- glmnet(XTrain,YTrain, family = "binomial", lambda = i, alpha=1,thresh=1e-12)
+  a <- LLfn(predict(f,newx=XVal, s = i, type = "response"), YVal)
+  n <- sum(abs(coef(f, s = i)) >= (10 ^ -2))
+  r  <- c(i, a, n)
+  llL <- rbind(llL, r)
+}
+
+bestlamL <- llL[which.max(llL[,2]),]
+# fits best when lamda = 7.13e-04 (LL = -442)
+
+llplot_L <- plot(llL[,1],llL[,2], xlab = 'lambda',ylab = 'LL',main='lasso regression with log-likelihood performance' )
+```
+
+```{r lasso feature selection}
+#For the lasso regression, make the plots of log-likelihood against the number of included variables
+llplot_L2 <- plot(llL[,3],llL[,2], xlab = '# of variables',ylab = 'LL')
+# When lambda is 7.13e-04, 48 variables are included in the model, and the log-likelihood reaches the highest at -442
+```
+
+Are you getting the behavior you expect? Why or why not? In answering this question, address both the results of the ridge regression and the lasso regression.
+
+yes. In general, performance decreases as complexity decreases.
+Regularization is a very important to prevent the coefficients to fit so perfectly to overfit. Lasso penalty function is also known as least absolute deviations, while ridge penalty function is also known as least squares error.
+
+ridge regression: when lambda less than 1.36e-03, log-likelihood increases as complexity decreases (lambda increases) and hence overfitting problem is reduced; When lamba is at 1.36e-03, the model gets its best performance. This is the point when the complexity of the model is the best. When lambda is greater than 1.36e-03, log-likelihood decreases as complexity decreases(lambda increases),which makes sense because this indicates that the penalty coefficient is too big to penalize the overfiting problem in this model.
+
+lasso regression: when lambda less than 7.13e-04, log-likelihood increases as complexity decreases (lambda increases) and hence overfitting problem is reduced; When lamba is at 7.13e-04, the model gets its best performance. This is the point when the complexity of the model is the best. When lambda is greater than 1.36e-03, log-likelihood decreases as complexity decreases(lambda increases),which makes sense because this indicates that the penalty coefficient is too big to penalize the overfiting problem in this model.
+
+lasso regularization has the built-in feature selection, and it is resistant to outliers so it is more robust.
+
+In this case, when we choose 48 variables, the model gets the best performance (highest log likelihood). 
+
+
+
+
+

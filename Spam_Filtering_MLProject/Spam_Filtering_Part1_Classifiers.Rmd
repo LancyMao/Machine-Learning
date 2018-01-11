@@ -1,0 +1,445 @@
+---
+title: "Assignment 3" -- Contributed by Athena Li, Lancy Mao, Elena Lopez
+output: html_notebook
+---
+```{r Load in datasets}
+rm(list = ls(all = TRUE))
+DataCoded <- read.table("spambasedata-Coded.csv",sep=",",header=T,
+                       stringsAsFactors=F)
+DataOrig <- read.table("spambasedata-Orig.csv",sep=",",header=T,
+                       stringsAsFactors=F)
+
+# Data sampling
+load("SpamdataPermutation.RData")
+DataCoded <- DataCoded[ord,]
+DataOrig <- DataOrig[ord,]
+```
+
+
+```{r Define AUC and ROC plot function}
+# Define AUC function as it is in class.
+AUCfn <- function(Pvec,Cvec) {
+  NHam <- sum(Cvec==0)
+  NSpam <- sum(Cvec==1)
+  PvecS <- unique(sort(Pvec))
+  x <- rep(NA,length(PvecS))
+  y <- rep(NA,length(PvecS))
+  for(i in 1:length(PvecS)) {
+    x[i] <- sum(Pvec>=PvecS[i]&Cvec==0)/NHam
+    y[i] <- sum(Pvec>=PvecS[i]&Cvec==1)/NSpam
+  }
+  x <- c(0,x,1)
+  y <- c(0,y,1)
+  ord <- order(x)
+  x <- x[ord]
+  y <- y[ord]
+  
+  AUC <- sum((x[2:length(x)]-x[1:(length(x)-1)])*(y[2:length(y)]+y[1:(length(y)-1)])/2)
+  return(AUC)
+}
+
+# Utilize self-defined ROC plot function
+source("ROCPlot.r")
+```
+
+Q2: Using the coded spam data set, find the best naïve Bayes model that you can find that uses no more than 10 features.
+```{r Q2 Find the best naive Bayes model using the coded spam data set}
+# Doing a 60-40 split
+TrainInd <- ceiling(nrow(DataCoded)*0.6)
+TrainCoded <- DataCoded[1:TrainInd,]
+ValCoded <- DataCoded[(TrainInd+1):nrow(DataCoded),]
+
+PSpam <- mean(TrainCoded$IsSpam)
+
+# compute probability of given Spam and given Ham
+fnGiv <- function(x) {
+  Probs <- table(x)
+  Probs <- Probs/sum(Probs)
+  return(Probs)
+}
+PGivenSpam <- lapply(TrainCoded[TrainCoded$IsSpam==1,],FUN=fnGiv)
+PGivenHam <- lapply(TrainCoded[TrainCoded$IsSpam!=1,],FUN=fnGiv)
+
+# define a function for Naive Bayes model
+fn <- function(DataRow,PGivenSpam,PGivenHam,PSpam) {
+  tmp1 <- 1.0
+  tmp2 <- 1.0
+  for(x in names(DataRow)) {
+    tmp1 <- tmp1*PGivenSpam[[x]][DataRow[x]]
+    tmp2 <- tmp2*PGivenHam[[x]][DataRow[x]]
+  }
+  out <- tmp1*PSpam/(tmp1*PSpam+tmp2*(1-PSpam))
+  return(out)
+}
+
+# Features forward selection: at first, build models with just one feature in each model, and select the first feature whose model has the highest AUC. And then , build models with two features, and use the chosen feature as one of the features, and then select the second feature whose model has the highest AUC. This process will be iterated to choose 10 good features.
+
+#The logic behind the loop is that: we are looking for 10 best features for the model. So everytime we have a new feature/ column, we want to see whether adding that feature in the model makes the AUC higher than before. If true, keep the feature, if not, keep searching...
+
+#We use training data to train the model and validation set to fit the model. This will less likely to overfit the training model but will at some extent overfit the validation model, since validation set is part of our feature selection process. 
+
+'%ni%' <- Negate('%in%')
+
+modelsauc <- matrix(, ncol=2, nrow=10)
+j = double(length = 10)
+b=0
+for (k in 1:10){
+ AUC=0
+ for (i in 1:(ncol(TrainCoded)-1)){
+  if (i %ni% j){
+    whVars <- colnames(TrainCoded)[c(j,i)]
+    fitted_naive <- apply(ValCoded[,whVars,drop=F],1,FUN=fn,PGivenSpam,PGivenHam,PSpam)
+    AUC_tmp <- AUCfn(fitted_naive,ValCoded[,"IsSpam"])
+    if (!is.na(AUC_tmp)){
+      if (AUC_tmp > AUC){
+         AUC = AUC_tmp
+         b = i
+      }}}}
+ j[k] = b
+ modelsauc[k,] <- c(k,AUC)
+}
+
+# find the model with highest auc
+k <- which.max(modelsauc[,2])
+whVars <- colnames(TrainCoded)[j[1:k]]
+
+# evaluate the model performance 
+fitted_naive <- apply(ValCoded[,whVars,drop=F],1,FUN=fn,PGivenSpam,PGivenHam,PSpam)
+
+ROC_naive <- ROCPlot(fitted_naive, ValCoded[,"IsSpam"])
+AUC_naive <- round(AUCfn(fitted_naive, ValCoded[,"IsSpam"]),5)
+
+#This one has an AUC of 0.967
+```
+
+Q3: Using the coded spam data set, find the best logistic regression model that you can find that uses no more than 10 features.
+```{r Q3 find the best logistic regression model using the coded spam data set}
+#Since logistic regression model only take numeric variables as inputs, we have to encode it into dummies
+DataEnu<- DataCoded
+DataEnu[DataEnu == "Zero"] <- 0
+DataEnu[DataEnu == "Low"] <- 1
+DataEnu[DataEnu == "Med"] <- 2
+DataEnu[DataEnu == "High"] <- 3
+DataEnu[DataEnu == "A"] <- 5
+DataEnu[DataEnu == "B"] <- 4
+DataEnu[DataEnu == "C"] <- 3
+DataEnu[DataEnu == "D"] <- 2
+DataEnu[DataEnu == "F"] <- 1
+
+# Doing a 60-40 split
+TrainEnu <- DataEnu[1:TrainInd,]
+ValEnu <- DataEnu[(TrainInd+1):nrow(DataEnu),]
+
+# features forward selection (same logic as above)
+
+modelsauc <- matrix(, ncol=2, nrow=10)
+j = double(length = 10)
+for (k in 1:10){
+ b=0
+ AUC = 0
+  for (i in (1:(ncol(TrainCoded)-1))){
+    if (i %ni% j){
+    whVars <- colnames(TrainEnu)[c(j,i)]
+    LR <- paste("IsSpam", paste(whVars,collapse=" + "),sep=" ~ ")
+    glmModel <- glm(LR, family=binomial(link='logit'),data=TrainEnu)
+    
+    fitted_lrcoded <- predict(glmModel,newdata=subset(ValEnu,select=c(j,i)),type='response')
+# Again, we use training data to train the model and validation set to fit the model. This will less likely to overfit the training model but will at some extent overfit the validation model, since validation set is part of our feature selection process. 
+    AUC_tmp <- AUCfn(fitted_lrcoded,ValEnu$IsSpam)
+      if (!is.na(AUC_tmp)){
+      if (AUC_tmp > AUC){
+        AUC = AUC_tmp
+        b = i
+  }}}}
+j[k]=b
+modelsauc[k,] <- c(k,AUC)
+}
+
+# find the model with highest auc
+k <- which.max(modelsauc[,2])
+whVars <- colnames(TrainEnu)[j[1:k]]
+BestLR_coded <- paste("IsSpam", paste(whVars,collapse=" + "),sep=" ~ ")
+glmModel_coded <- glm(BestLR_coded, family=binomial(link='logit'),data=TrainEnu)
+
+# evaluate the model performance 
+fitted_lrcoded <- predict(glmModel_coded,newdata=subset(ValEnu,select=c(j)),type='response')
+ROC_LR_coded <- ROCPlot(fitted_lrcoded,ValEnu[,"IsSpam"])
+AUC_LR_coded <- round(AUCfn(fitted_lrcoded,ValEnu$IsSpam),5)
+
+#With coded data set, using the logistic regression model, we get an AUC of 0.974
+```
+
+We also tried to use stepwise to see whether this will produce a better model
+```{r Q3 Logistic Regression_method 2 using stepwise to select features_coded dataset}
+
+# build small and big formula
+allVars <- colnames(DataCoded)[1:ncol(DataCoded)-1]
+Small <- as.formula(paste("IsSpam", paste(c(1),collapse=" + "),sep=" ~ "))
+Big <- as.formula(paste("IsSpam", paste(c(1,whVars),collapse=" + "),sep=" ~ "))
+
+OutSmall <- glm(Small,family=binomial(link='logit'),data=TrainEnu) 
+
+sc <- list(lower=Small,upper=Big)
+
+# set steps=10, because we can only select no more than 10 features.
+out <- step(OutSmall,scope=sc,direction="both",steps=10)
+
+BestLR_s_coded <- out$formula
+glmModel_s_coded <- glm(BestLR_s_coded, family=binomial(link='logit'),data=TrainEnu)
+
+# evaluate the model performance 
+fitted_s_lrcoded <- predict(glmModel_s_coded,newdata=ValEnu,type='response')
+ROC_LR_s_coded <- ROCPlot(fitted_s_lrcoded,ValEnu[,"IsSpam"])
+AUC_LR_s_coded <- round(AUCfn(fitted_s_lrcoded,ValEnu$IsSpam),5)
+
+#With coded data set, using the logistic regression model and stepwise feature selection, we get an AUC of 0.974
+```
+
+Q4: Using the un-coded spam data set, find the best logistic regression model that you can find that uses no more than 10 features.
+
+```{r Q4 find the best logistic regression model using the un-coded spam data set}
+# Doing a 60-40 split
+TrainOrig <- DataOrig[1:TrainInd,]
+ValOrig <- DataOrig[(TrainInd+1):nrow(DataOrig),]
+
+# features forward selection 
+
+modelsauc <- matrix(, ncol=2, nrow=10)
+j = double(length = 10)
+for (k in 1:10){
+ b=0
+ AUC = 0
+  for (i in (1:(ncol(TrainCoded)-1))){
+    if (i %ni% j){
+    whVars <- colnames(TrainOrig)[c(j,i)]
+    LR <- paste("IsSpam", paste(whVars,collapse=" + "),sep=" ~ ")
+    glmModel <- glm(LR, family=binomial(link='logit'),data=TrainOrig)
+    
+    fitted_lruncoded <- predict(glmModel,newdata=subset(ValOrig,select=c(j,i)),type='response')
+
+    AUC_temp <- AUCfn(fitted_lruncoded,ValOrig$IsSpam)
+      if (!is.na(AUC_temp)){
+      if (AUC_temp > AUC){
+        AUC = AUC_temp
+        b = i
+  }}}}
+j[k]=b
+modelsauc[k,] <- c(k,AUC)
+}
+
+# find the model with highest auc
+k <- which.max(modelsauc[,2])
+whVars <- colnames(TrainOrig)[j[1:k]]
+BestLR_uncoded <- paste("IsSpam", paste(whVars,collapse=" + "),sep=" ~ ")
+glmModel_uncoded <- glm(BestLR_uncoded, family=binomial(link='logit'),data=TrainOrig)
+
+# evaluate the model performance 
+fitted_lruncoded <- predict(glmModel_uncoded,newdata=ValOrig,type='response')
+ROC_LR_uncoded <- ROCPlot(fitted_lruncoded,ValOrig[,"IsSpam"])
+AUC_LR_uncoded <- round(AUCfn(fitted_lruncoded,ValOrig[,"IsSpam"]),5)
+
+#With coded data set, using the logistic regression model, we get an AUC of 0.967.
+```
+Stepwise feature selection. Trying to find better features
+```{r Q4 Logistic Regression_method 2 using stepwise to select features_uncoded dataset}
+# same steps as before, but we change the dataset to uncoded training set
+OutSmall <- glm(Small,family=binomial(link='logit'),data=TrainOrig) 
+sc <- list(lower=Small,upper=Big)
+
+# set steps=10, because we can only select no more than 10 features.
+out <- step(OutSmall,scope=sc,direction="both",steps=10)
+
+BestLR_s_uncoded <- out$formula
+glmModel_s_uncoded <- glm(BestLR_s_uncoded, family=binomial(link='logit'),data=TrainOrig)
+
+# evaluate the model performance 
+fitted_s_lruncoded <- predict(glmModel_s_uncoded,newdata=ValOrig,type='response')
+ROC_LR_s_uncoded <- ROCPlot(fitted_s_lruncoded,ValOrig[,"IsSpam"])
+AUC_LR_s_uncoded <- round(AUCfn(fitted_s_lruncoded,ValOrig$IsSpam),5)
+
+#With uncoded data set, using the logistic regression model and stepwise feature selection, we get an AUC of 0.963
+```
+
+
+
+
+
+Q5: Of these three models which seems to be better? How much of an effect did coding the variables seem to have?
+
+So the logistic regression model using the coded dataset produces the highest performance (AUC = 0.974). After coding the dataset, the AUC is higher by 0.07, which is not a signifianct effect.
+
+
+
+Q6: Using one other technique that we have learned about, find the best model that uses no more than 10 features and compare its performance to the other models. --- We choose to use random forest
+
+```{r Q6 find the best ramdon forest model using the un-coded spam data set}
+# import libraries
+if(!require("randomForest")) { install.packages("randomForest"); require("randomForest") }
+library(randomForest)
+
+# features forward selection
+# The logic behind the loop is that: we are looking for 10 best features for the model. So everytime we have a new feature/ column, we want to see whether adding that feature in the model makes the AUC higher than before. If true, keep the feature, if not, keep searching...
+modelsauc <- matrix(, ncol=2, nrow=10)
+j = double(length = 10)
+for (k in 1:10){
+ b=0
+ AUC = 0
+  for (i in (1:(ncol(TrainOrig)-1))){
+    if (i %ni% j){ #if i not in j, make sure the second feature is the first feature
+    whVars <- colnames(TrainOrig)[c(j,i)]
+    rf <- as.formula(paste("IsSpam", paste(whVars,collapse=" + "),sep=" ~ ")) 
+    
+    #train the randomforest model without bagging (mtry=1)
+    rfModel <- randomForest(rf,TrainOrig,
+                     sampsize=ceiling(nrow(TrainOrig)/4),
+                     mtry=1,ntree=500,maxnodes=50)
+    
+    #fit the model to get prediction
+    fitted_rfuncoded <- predict(rfModel,newdata=subset(ValOrig,select=c(j,i)),type='response')
+    
+    #compare the prediction with actual value in validation data
+    AUC_tmp <- AUCfn(fitted_rfuncoded,ValOrig$IsSpam)
+      if (!is.na(AUC_tmp)){
+      if (AUC_tmp > AUC){
+        AUC = AUC_tmp
+        b = i
+  }}}}
+j[k]=b
+modelsauc[k,] <- c(k,AUC)
+}
+
+
+# find the model with highest auc using the features that we just found
+k <- which.max(modelsauc[,2])
+whVars <- colnames(TrainOrig)[j[1:k]]
+RF_uncoded <- as.formula(paste("IsSpam", paste(whVars,collapse=" + "),sep=" ~ "))
+rfModel <- randomForest(RF_uncoded, data=TrainOrig,sampsize=ceiling(nrow(TrainOrig)/4), mtry=1,ntree=500,maxnodes=50)
+
+
+# evaluate the model performance 
+fitted_rfuncoded <- predict(rfModel,newdata=ValOrig,type='response')
+ROC_RF_uncoded <- ROCPlot(fitted_rfuncoded,ValOrig[,"IsSpam"])
+AUC_RF_uncoded <- round(AUCfn(fitted_rfuncoded,ValOrig$IsSpam),5)
+
+# So the AUC for un-coded random Forest model is 0.97487.
+```
+
+Q6: We also used coded data set to make the same kind of random forest prediction
+```{r Q6 find the best ramdon forest model using the coded spam data set}
+# features forward selection
+# So this time, we are using the coded data that was created before. The logic is exactly the same as the uncoded data
+modelsauc <- matrix(, ncol=2, nrow=10)
+j = double(length = 10)
+for (k in 1:10){
+ b=0
+ AUC = 0
+  for (i in (1:(ncol(TrainOrig)-1))){
+    if (i %ni% j){
+    whVars <- colnames(TrainEnu)[c(j,i)]
+    rf <- as.formula(paste("IsSpam", paste(whVars,collapse=" + "),sep=" ~ "))
+    rfModel <- randomForest(rf,TrainEnu,
+                     sampsize=ceiling(nrow(TrainEnu)/4),
+                     mtry=1,ntree=500,maxnodes=50)
+    
+    fitted_rfcoded <- predict(rfModel,newdata=subset(ValEnu,select=c(j,i)),type='response')
+
+    AUC_tmp <- AUCfn(fitted_rfcoded,ValEnu[,"IsSpam"])
+      if (!is.na(AUC_tmp)){
+      if (AUC_tmp > AUC){
+        AUC = AUC_tmp
+        b = i
+  }}}}
+j[k]=b
+modelsauc[k,] <- c(k,AUC)
+}
+
+
+# find the model with highest auc
+k <- which.max(modelsauc[,2])
+whVars <- colnames(TrainEnu)[j[1:k]]
+RF_coded <- as.formula(paste("IsSpam", paste(whVars,collapse=" + "),sep=" ~ "))
+rfModel <- randomForest(RF_coded, data=TrainEnu,sampsize=ceiling(nrow(TrainOrig)/4), mtry=1,ntree=500,maxnodes=5)
+#, sampsize=ceiling(nrow(TrainOrig)/4), mtry=1,ntree=500,maxnodes=50
+
+# evaluate the model performance 
+fitted_rfcoded <- predict(rfModel,newdata=ValEnu,type='response')
+ROC_RF_coded <- ROCPlot(fitted_rfcoded,ValEnu[,"IsSpam"])
+AUC_RF_coded <- round(AUCfn(fitted_rfcoded,ValEnu[,"IsSpam"]),5)
+
+# So the AUC for coded random Forest model is 0.96799, a little lower than using un-coded data. 
+
+```
+
+
+```{r Q7 ensemble methods 1}
+# We choose Naive Bayes model, Logistic Regression and Remdon Forest model using coded dataset
+# Get fitted value by taking the average of predictions from previous three models. So each of the new prediction will be the average of the 3 previous models' predictions.
+# This might me a little over-simplified as each of the model actually selects different features
+
+fitted_ensemble1 <- (fitted_naive[]+ fitted_lrcoded[]+ fitted_rfcoded[])/3
+
+# evaluate ensemble methods performance
+ROC_ensemble1 <- ROCPlot(fitted_ensemble1,ValCoded[,"IsSpam"])
+AUC_ensemble1 <- round(AUCfn(fitted_ensemble1,ValCoded[,"IsSpam"]),5)
+
+#So the AUC for this simple ensemble approch is 0.9755, which is the highest AUC so far (higher than any another independent model above).
+```
+
+
+```{r Q7 ensemble methods 2}
+# This time, we are trying another ensemble approch by incoporated the mean prediction into the previous feature selection loop. This approch will ensure that all 3 models' predictions are based on the same features from the dataset, which is less likely to overfit.
+
+# features forward selection, exactly the same logic as it is before...
+
+modelsauc <- matrix(, ncol=2, nrow=10)
+j = double(length = 10)
+b=0
+for (k in 1:10){
+ AUC=0
+ for (i in 1:(ncol(TrainCoded)-1)){
+  if (i %ni% j){
+    whVars <- colnames(TrainCoded)[c(j,i)]
+    
+    naive_predict <- apply(ValCoded[,whVars,drop=F],1,FUN=fn,PGivenSpam,PGivenHam,PSpam)
+    
+    ES <- as.formula(paste("IsSpam", paste(whVars,collapse=" + "),sep=" ~ "))
+    glmModel <- glm(ES, family=binomial(link='logit'),data=TrainEnu)
+    LG_predict <- predict(glmModel,newdata=subset(ValEnu,select=c(j,i)),type='response')
+    
+    rfModel <- randomForest(ES,TrainEnu,
+                     sampsize=ceiling(nrow(TrainEnu)/4),
+                     mtry=1,ntree=500,maxnodes=50)
+    RF_predict <- predict(rfModel,newdata=subset(ValEnu,select=c(j,i)),type='response')
+    
+    #after putting all three predictions together, devided by 3, we get the mean for each "row"
+    fitted_ensemble2 <- (naive_predict[] + LG_predict[] + RF_predict[])/3
+    
+    AUC_tmp <- AUCfn(fitted_ensemble2, ValCoded[,"IsSpam"])
+     if (!is.na(AUC_tmp)){
+      if (AUC_tmp > AUC){
+         AUC = AUC_tmp
+         b = i
+      }}}}
+ j[k] = b
+ modelsauc[k,] <- c(k,AUC)
+}
+
+# find the model with highest auc
+k <- which.max(modelsauc[,2])
+whVars <- colnames(TrainCoded)[j[1:k]]
+
+# evaluate the model performance 
+fitted_ensemble2 <- (naive_predict[] + LG_predict[] + RF_predict[])/3
+
+ROC_ensemble2 <- ROCPlot(fitted_ensemble2, ValCoded[,"IsSpam"])
+AUC_ensemble2 <- round(AUCfn(fitted_ensemble2, ValCoded[,"IsSpam"]),5)
+
+# This model has an AUC of 0.967, which is lower than the previous ensemble approch. So, using the mean of all three predictions from previous models with different feature selection may be the best model so far.
+```
+
+
+
+
+
+
+
