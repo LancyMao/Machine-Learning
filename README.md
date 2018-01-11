@@ -1,5 +1,5 @@
 # Machine-Learning
-Building supervised learning models (both regression and classification) using R
+Applying Machine Learning Algorithms to prediction using R, Python, and RapidMiner.
 
 ## Project: Click_Through_Competition
 This project involves predicting clicks for on-line advertisements. The training data consists of data for 9 days from October 21, 2014 to October 29, 2014. The criterion used to evaluate the performance is log-loss. 
