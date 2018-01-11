@@ -1,0 +1,248 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+```{r}
+
+rm(list = ls(all = TRUE))
+
+library(data.table)
+TrainData <- fread(file = 'ProjectTrainingData.csv')
+TestData <- fread(file = 'ProjectTestData.csv')
+
+TrainData <- TrainData[,-1]   # drop 'id' column
+TestData <- TestData[,-1]
+
+# we get the hour for each obs
+TrainData$hr<-substr(TrainData$hour,7,8)
+TestData$hr<-substr(TestData$hour,7,8)
+
+# create list containing unique category of every variable----------------------
+TrainDataUnique <- lapply(TrainData,FUN=unique)
+TestDataUnique <- lapply(TestData,FUN=unique)
+
+# new categories in test but not training data
+#NewCats <- list(NULL)
+for (i in 3:ncol(TrainData)){
+  wh <- !(TestDataUnique[[i-1]] %in% TrainDataUnique[[i]])
+  cat('i=',i,names(TestDataUnique[i-1]),', number of new cats = ',sum(wh),'\n')
+  cat('percent in test data = ',round(sum(wh)/length(wh)*100,1),'\n')
+  # NewCats[[i]] <- TestDataUnique[[i-1]][wh]
+}
+
+# new categories occupy 50% in test of device_id and device_ip, so we will not use them as predictors
+TrainData <- TrainData[,c(-2,-11,-12)]   
+TestData <- TestData[,c(-1,-10,-11)]
+
+fwrite(TrainData,file='Train_v1.csv')
+fwrite(TestData,file='Test_v1.csv')
+```
+
+```{r prep for scan, run before assign others}
+rm(list = ls(all = TRUE))
+library(data.table)
+TrainData <- fread(file = 'Train_v1.csv')
+TestData <- fread(file = 'Test_v1.csv')
+
+
+TrainData <- as.data.frame(TrainData)
+TestData <- as.data.frame(TestData)
+TestData[] <- lapply(TestData, as.character)
+TrainData[] <- lapply(TrainData, as.character)
+TrainData$click <- as.numeric(TrainData$click)
+
+```
+
+```{r scan unseen category}
+# Distribution of different categories, and then define which category should be coded as 'others'
+for (i in 3:ncol(TrainData) ){
+print(names(TrainData)[i])
+
+tmp <- sort(table(TrainData[[i]]),decreasing=T)
+cat('number of category = ', length(tmp),'\n')
+
+p <- min(length(tmp),20)
+tmp <- tmp[1:p]
+print(tmp)
+plot(1:length(tmp),tmp)
+print('----------')
+scan()
+}
+
+# variables should be coded & top n categories should remained
+# c1 5
+# banner_pos 4
+# site_id 15
+# site_domain 15
+# site_category 13
+# app_id 15
+# app_domain 15
+# app_category 13
+# device_model 15
+# device_type 4
+# device_conn_type 4
+# C14 15
+# C15 14
+# C16 5
+# C17 15
+# C18 4
+# C19 15
+# C20 15
+# C21 15
+
+
+```
+
+```{r assign "others"}
+var <- c(2:20)
+cate <- c(5,4,15,15,13,15,15,13,15,4,4,15,14,5,15,4,15,15,15)
+
+top=list(NULL)
+for (i in 1: length(var)){
+  cat <- sort(table(TrainData[,var[i]]),decreasing=T)
+  top[[i]] <- c(names(cat[1:cate[i]]),'others')
+}
+
+# code small categories as others in both training and test dataset
+for (i in 1: length(var)){
+TrainData[,var[i]][!TrainData[,var[i]] %in% top[[i]] ] <- 'others'
+TestData[,(var[i]-1)][!TestData[,(var[i]-1)] %in% top[[i]] ] <- 'others'
+}
+
+#since logistic regression can only train numeric data, we transfer all catogorical variables into numerical type
+TrainData[] <- lapply(TrainData, as.factor)
+TrainData[] <- lapply(TrainData, as.numeric)
+TestData[] <- lapply(TestData, as.factor)
+TestData[] <- lapply(TestData, as.numeric)
+
+TrainData <- as.data.table(TrainData)
+TestData <- as.data.table(TestData)
+
+fwrite(TrainData,file='Train_v2.csv')
+fwrite(TestData,file='Test_v2.csv')
+```
+
+```{r load data}
+rm(list = ls(all = TRUE))
+library(data.table)
+TrainData <- fread(file = 'Train_v2.csv')
+Trainy <- TrainData[,1]
+TrainData <- TrainData[,-1]
+TrainData[] <- lapply(TrainData,as.factor)
+TrainData <- cbind(Trainy,TrainData)
+```
+
+```{r log loss function}
+LL <- function(Pred,YVal){
+  ll <- -mean(YVal*log(Pred)+(1-YVal)*log(1-Pred))
+  return(ll)
+}
+```
+
+```{r split data into training and validation}
+traintable <- table(TrainData$click)
+numclick <- unname(traintable[which(names(traintable)==1)])
+
+valid<- sample(nrow(TrainData), size=100000)
+ValData <- TrainData[valid,]
+table(ValData$click)
+
+trainid<- sample(nrow(TrainData)-100000, size=300000)
+TraData <- TrainData[-valid,][trainid,]
+table(TraData$click)
+
+# split X and Y
+XTrain <- TraData[,-1]
+YTrain <- TraData$click
+
+XVal <- ValData[,-1]
+YVal <- ValData$click
+```
+
+```{r lasso}
+library(glmnet)
+library(ModelMetrics)
+XTrain <- model.matrix(~ .,XTrain)
+XVal <- model.matrix(~ .,XVal)
+# XTrain <- as.matrix(XTrain)
+# XVal <- as.matrix(XVal)
+
+grid <- 10^(seq(-6,-2,length=50))
+outll <- glmnet(XTrain,YTrain, family = "binomial", lambda = grid, alpha=1)
+p <- predict(outll, newx = as(XVal, "dgCMatrix"), type = "response" )
+
+laout <- matrix(, ncol = 2)
+for (i in 1:50)
+{ a<- LL(p[,i],YVal)
+r <- c(grid[51-i],a)
+laout <- rbind(laout,r)
+}
+
+plot(laout[,1],laout[,2],xlab='lambda',ylab='log loss')
+bestlamR <- laout[which.min(laout[,2]),]
+
+outll <- glmnet(XTrain,YTrain, family = "binomial", lambda = 0.000001, alpha=1)
+n <- sum(abs(coef(outll)) != 0) # select 230 variables
+# lambda = 2.45e-06, ll = 0.415
+ 
+outll <- glmnet(XTrain,YTrain, family = "binomial",lambda=2.45e-06, alpha=1)
+
+save(outll,file='outll.rda')
+```
+
+```{r decision tree}
+if(!require("tree")) { install.packages("tree"); require("tree") }
+if(!require("ISLR")) { install.packages("ISLR"); require("ISLR") }
+if(!require("rgl")) { install.packages("rgl"); require("rgl") }
+
+tc <- tree.control(nrow(TraData), mincut = 5000, minsize = 20000)
+DT <- as.formula(paste("click", paste(colnames(TraData[,-1]),collapse=" + "), sep=" ~ "))
+outtree <- tree(DT, data=TraData, control=tc, spilt = "gini")
+
+p <- predict(outtree, XVal)
+treell <- LL(predict(outtree, XVal), YVal)
+
+save(outtree,file='outtree.rda')
+```
+
+```{r predict in entire test dataset}
+# import test samples
+XTest1 <- fread('Test_v00')
+XTest1 <- fread('Test_v01')
+XTest1 <- fread('Test_v02')
+XTest1 <- fread('Test_v03')
+XTest1 <- fread('Test_v04')
+
+XTest1 <- fread('Test_v05')
+XTest1 <- fread('Test_v06')
+XTest1 <- fread('Test_v07')
+XTest1 <- fread('Test_v08')
+XTest1 <- fread('Test_v09')
+
+XTest1 <- fread('Test_v10')
+XTest1 <- fread('Test_v11')
+XTest1 <- fread('Test_v12')
+XTest1 <- fread('Test_v13')
+
+#cl <- colnames(XTest1)
+colnames(XTest1)<-cl
+XTest1[] <- lapply(XTest1,as.factor)
+
+# lasso prediction----------------
+XTest1 <- as.matrix(XTest1)
+#Ypre_lasso=NULL
+Ypre_lasso <- rbind(Ypre_lasso,as.data.frame(predict(outll, newx=as(XTest1, "dgCMatrix"), type = 'response')))
+colnames(Ypre_lasso ) <- 'click_lasso'
+fwrite(Ypre_lasso,file='Ypre_lasso.csv')
+
+# tree prediction----------------
+#XTest1 <- model.matrix(~.,XTest1)
+#Ypre_tree=NULL
+Ypre_tree <- rbind(Ypre_tree,as.data.frame(predict(outtree, XTest1)))
+colnames(Ypre_tree ) <- 'click_tree'
+fwrite(Ypre_tree,file='Ypre_tree.csv')
+
+# column bind these two predictions
+TestData <- cbind(Ypre_lasso,Ypre_tree)
+fwrite(TestData,file='Test_pred.csv')
+```
