@@ -1,5 +1,5 @@
 * linguist-vendored
-*.Rmd linguist-vendored=false
+*.r linguist-vendored=false
 *.ipynb linguist-vendored=false
-*.Rmd linguist-language=R
+*.r linguist-language=R
 *.ipynb linguist-language=Python
