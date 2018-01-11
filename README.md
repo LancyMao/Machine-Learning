@@ -12,3 +12,17 @@ There are two parts:
 1: used feature selection, naive bayes model, logistic regression, random forest model, and ensemble method; 
 2: used regularized models with penalties--lasso and ridge regression. 
 Contributors: Lancy Mao, Athena Li (Teammate), George Easton (Professor)
+
+## Project: Kindle_Books_Sales_Ranking
+This project involves predicting sales ranking of ebooks on Kindle based on their features. 
+Contributors: Lancy Mao, Athena Li (Teammate)
+
+## Exercise: Breast_Cancer_Prediction
+This project involves predicting breast cancer.
+Performed a predictive modeling analysis on this same dataset using the decision tree, the k-NN technique and the logistic regression technique. 
+Contributors: Lancy Mao, Vilma Todri (Professor)
+
+## Exercise: Customer_Spending_Prediction
+This project involves predicting customer spending.
+Used Rapidminer to build numeric prediction models that predict Spending based on the other available customer information. Used linear regression, k-NN, and regression tree techniques.
+Contributors: Lancy Mao, Vilma Todri (Professor)
